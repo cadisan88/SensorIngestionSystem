@@ -81,6 +81,9 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # The API publishes to the exchange, so the exchange must exist first.
+      rabbitmq-setup:
+        condition: service_completed_successfully
 
   db:
     image: mariadb:11.4
@@ -159,22 +162,21 @@ services:
     networks:
       - backend
 
+  # Runs once: creates the RabbitMQ exchange, queues and bindings.
+  rabbitmq-setup:
+    <<: *php-service
+    restart: "no"
+    command: ["php", "artisan", "rabbitmq:setup"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
   # ---------------------------------------------------------------
   # The services below need Artisan commands that we have not written
   # yet. They are in the "workers" profile, so they do not start with
   # a normal "docker compose up". Start them with:
   #   docker compose --profile workers up -d
   # ---------------------------------------------------------------
-
-  # Runs once: creates the RabbitMQ exchange, queues and bindings.
-  rabbitmq-setup:
-    <<: *php-service
-    profiles: ["workers"]
-    restart: "no"
-    command: ["php", "artisan", "rabbitmq:setup"]
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
 
   state-worker:
     <<: *php-service
