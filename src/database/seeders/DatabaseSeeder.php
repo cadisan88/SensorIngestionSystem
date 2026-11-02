@@ -4,9 +4,9 @@ namespace Database\Seeders;
 
 use App\Models\Sensor;
 use App\Models\Stall;
+use App\Services\SensorStallResolver;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\Redis;
 
 class DatabaseSeeder extends Seeder
 {
@@ -27,7 +27,7 @@ class DatabaseSeeder extends Seeder
     /**
      * Safe to run more than once. It does not create duplicates.
      */
-    public function run(): void
+    public function run(SensorStallResolver $resolver): void
     {
         foreach (self::DEMO_STALLS as $code => $sensorUid) {
             $stall = Stall::firstOrCreate(['code' => $code]);
@@ -39,7 +39,7 @@ class DatabaseSeeder extends Seeder
 
             // This code changes a mapping, so it must clear the cached values.
             // The workers will read the new mapping from the database.
-            Redis::del("sensors:{$sensorUid}:stall", "sensors:{$sensorUid}:unknown");
+            $resolver->forget($sensorUid);
         }
     }
 }

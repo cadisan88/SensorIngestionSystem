@@ -10,6 +10,7 @@ x-app-environment: &app-environment
   APP_URL: ${APP_URL:-http://localhost:8081}
   LOG_CHANNEL: ${LOG_CHANNEL:-stderr}
   GATEWAY_TOKEN: ${GATEWAY_TOKEN}
+  INGRESS_MAX_FUTURE_SECONDS: ${INGRESS_MAX_FUTURE_SECONDS:-300}
 
   DB_CONNECTION: mariadb
   DB_HOST: db

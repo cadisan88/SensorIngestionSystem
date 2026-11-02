@@ -83,7 +83,7 @@ Authentication: the gateway sends a shared secret in the `X-Gateway-Token` heade
 |--------|---------|
 | 202 | RabbitMQ confirmed the message. Body has a `tracking_id`. |
 | 401 | Missing or wrong gateway token. |
-| 422 | The payload is not valid, or the timestamp is far in the future. Nothing is queued. |
+| 422 | The payload is not valid, or the timestamp is too far in the future (5 minutes by default, set by `INGRESS_MAX_FUTURE_SECONDS` in `.env`). Nothing is queued. |
 | 503 | The message could not be confirmed by RabbitMQ. The gateway should retry. |
 
 Event types:
@@ -108,19 +108,19 @@ These are public, return only up or down, and show no version details.
 
 - Exchange: `sensor.events` (topic, durable)
 - Routing keys: `sensor.state.occupied`, `sensor.state.vacant`, `sensor.telemetry.heartbeat`, `sensor.telemetry.error`
-- Dead letter exchange: `sensor.events.dlx`
+- Dead letter exchange: `sensor.events.dlx` (fanout, durable)
 
 | Queue | Binding | Purpose |
 |-------|---------|---------|
 | `real_time_state_processing` | `sensor.state.*` | Fast path: live stall state and sessions |
 | `telemetry_analytics` | `sensor.#` | Stores every frame as a sensor reading |
-| `dead_letter_queue` | from `sensor.events.dlx` | Keeps messages that cannot be processed |
+| `dead_letter_queue` | from `sensor.events.dlx` | Keeps messages that cannot be processed. It has no delivery limit, so they are never dropped. |
 
 Decisions:
 
 - **Quorum queues with a delivery limit.** A message that fails 5 times is moved to `dead_letter_queue` by RabbitMQ itself. Workers do not need their own retry counter.
 - **Persistent messages and publisher confirms.** Messages are published as persistent, and the API returns `202` only after RabbitMQ confirms it.
-- **One setup command.** An idempotent Artisan command (`rabbitmq:setup`) declares the exchanges, queues, bindings and dead letter settings. Docker Compose runs it before the workers start. The API never declares queues.
+- **One setup command.** An idempotent Artisan command (`rabbitmq:setup`) declares the exchanges, queues, bindings and dead letter settings. Docker Compose runs it before the API and the workers start. The API never declares queues.
 - The two business queues are separate, so a slow history write never delays the live state.
 
 ### 4. Sensor to stall mapping
@@ -130,13 +130,13 @@ The server owns the mapping. Sensors do not know their stall.
 - The `sensors` table links `sensor_uid` to a stall.
 - Workers resolve the stall in this order: Redis, then MariaDB, then write the result to Redis.
 - Found mappings are cached with no expiry (`sensors:{sensor_uid}:stall`).
-- Whoever changes a mapping (a seeder or a command) must also update or delete that Redis key.
+- Whoever changes a mapping (a seeder or a command) must also clear the Redis keys of that sensor: the mapping and the `unknown` marker.
 
 **Unknown sensors**
 
 - The state worker treats it as a permanent error. It rejects the message into `dead_letter_queue` and logs a clear line. No stall is ever created automatically.
 - The telemetry worker still stores the reading with an empty stall, because battery and signal data are still valid.
-- "Unknown" is remembered in Redis for a short time, so a flood from one unregistered device does not hit the database.
+- "Unknown" is remembered in Redis for 60 seconds, so a flood from one unregistered device does not hit the database.
 - After the sensor is registered, the messages in `dead_letter_queue` can be published again.
 
 ### 5. Live state in Redis
@@ -146,7 +146,7 @@ The server owns the mapping. Sensors do not know their stall.
 | `stalls:{stall_id}:state` | hash | `state` (OCCUPIED or VACANT), `last_updated_ts` |
 | `sensors:{sensor_uid}:telemetry` | hash | battery, temperature, RSSI, `last_seen_at` |
 | `sensors:{sensor_uid}:stall` | string | stall id, no expiry |
-| `sensors:{sensor_uid}:unknown` | string | short-lived marker for unknown sensors |
+| `sensors:{sensor_uid}:unknown` | string | marker for unknown sensors, expires after 60 seconds |
 
 Radio packets can arrive out of order. A small Lua script compares the packet timestamp with `last_updated_ts` and writes only if the packet is not older. The check and the write happen in one atomic step. A packet with the same timestamp is accepted, so processing a message twice gives the same result.
 
@@ -274,7 +274,7 @@ curl -X POST http://localhost:8081/api/v1/telemetry/ingress \
 Scale the workers:
 
 ```bash
-docker compose up -d --scale state-worker=3
+docker compose --profile workers up -d --scale state-worker=3
 ```
 
 ### Admin access
@@ -287,7 +287,7 @@ The API is the only service open to the network. MariaDB, Redis and the RabbitMQ
 docker compose exec app php artisan test
 ```
 
-Tests cover the gateway token, request validation, publishing to the queue, sensor to stall mapping (including unknown sensors), the session rules, and out-of-order handling.
+Planned tests: the gateway token, request validation, publishing to the queue, sensor to stall mapping (including unknown sensors), the session rules, and out-of-order handling.
 
 ## Future work
 
