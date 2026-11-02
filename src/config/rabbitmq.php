@@ -11,8 +11,19 @@ return [
     'connection_timeout' => 3.0,
     'read_write_timeout' => 3.0,
 
+    // Seconds the API waits for the broker to confirm a message.
+    'confirm_timeout' => 3.0,
+
     'exchange' => 'sensor.events',
     'dead_letter_exchange' => 'sensor.events.dlx',
+
+    // Event type => routing key.
+    'routing_keys' => [
+        'OCCUPIED' => 'sensor.state.occupied',
+        'VACANT' => 'sensor.state.vacant',
+        'HEARTBEAT' => 'sensor.telemetry.heartbeat',
+        'ERROR' => 'sensor.telemetry.error',
+    ],
 
     // RabbitMQ counts redeliveries, not the first delivery.
     // A limit of 4 means 5 deliveries in total.

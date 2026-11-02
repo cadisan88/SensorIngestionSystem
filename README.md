@@ -63,6 +63,8 @@ The controller checks the gateway token, validates the payload, publishes it to 
 
 The sensor only sends its own ID. The server decides which stall the sensor belongs to (see "Sensor to stall mapping").
 
+`gateway_id` is required, but it is not stored or compared against anything. This keeps the proof of concept simple.
+
 ```json
 {
   "sensor_uid": "sensor-99f4a1",
@@ -270,6 +272,28 @@ curl -X POST http://localhost:8081/api/v1/telemetry/ingress \
     "timestamp": 1793397360
   }'
 ```
+
+Or use the gateway emulator, an Artisan command that sends real HTTP requests to the endpoint:
+
+```bash
+# One OCCUPIED packet from the demo sensor
+docker compose exec app php artisan gateway:emulate OCCUPIED
+
+# A heartbeat from another sensor, with a low battery
+docker compose exec app php artisan gateway:emulate HEARTBEAT sensor-99f4a2 --battery=12
+
+# The same packet 3 times (duplicates)
+docker compose exec app php artisan gateway:emulate OCCUPIED --count=3
+
+# A packet that is 5 minutes late
+docker compose exec app php artisan gateway:emulate VACANT --offset=-300
+
+# An unknown sensor, and a wrong token
+docker compose exec app php artisan gateway:emulate OCCUPIED sensor-unknown
+docker compose exec app php artisan gateway:emulate OCCUPIED --token=wrong
+```
+
+See all options with `docker compose exec app php artisan gateway:emulate --help`.
 
 Scale the workers:
 
