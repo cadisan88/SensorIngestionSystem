@@ -298,7 +298,7 @@ See all options with `docker compose exec app php artisan gateway:emulate --help
 Scale the workers:
 
 ```bash
-docker compose --profile workers up -d --scale state-worker=3
+docker compose up -d --scale state-worker=3
 ```
 
 ### Admin access
