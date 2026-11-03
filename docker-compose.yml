@@ -178,6 +178,8 @@ services:
     <<: *php-service
     restart: unless-stopped
     command: ["php", "artisan", "consume:state"]
+    # The PHP-FPM image stops with SIGQUIT, but the workers handle SIGTERM.
+    stop_signal: SIGTERM
     stop_grace_period: 30s
     depends_on:
       rabbitmq-setup:
@@ -191,6 +193,8 @@ services:
     <<: *php-service
     restart: unless-stopped
     command: ["php", "artisan", "consume:telemetry"]
+    # The PHP-FPM image stops with SIGQUIT, but the workers handle SIGTERM.
+    stop_signal: SIGTERM
     stop_grace_period: 30s
     depends_on:
       rabbitmq-setup:

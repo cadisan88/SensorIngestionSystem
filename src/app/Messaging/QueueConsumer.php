@@ -60,9 +60,11 @@ class QueueConsumer
     }
 
     /**
+     * Runs the handler on one message, then acks or rejects it.
+     *
      * @param  callable(array<string, mixed>): void  $handler
      */
-    private function handle(string $queue, AMQPMessage $message, callable $handler): void
+    public function handle(string $queue, AMQPMessage $message, callable $handler): void
     {
         try {
             $handler($this->decode($message));
@@ -74,16 +76,17 @@ class QueueConsumer
                 'body' => $message->getBody(),
             ]);
 
-            $message->nack(requeue: false);
+            $message->reject(requeue: false);
         } catch (Throwable $e) {
-            // RabbitMQ counts this delivery and enforces the delivery limit.
-            Log::error('Message failed. RabbitMQ will deliver it again.', [
+            Log::error('Message failed. It returns to the queue until the delivery limit.', [
                 'queue' => $queue,
                 'error' => $e->getMessage(),
                 'body' => $message->getBody(),
             ]);
 
-            $message->nack(requeue: true);
+            // Use reject, not nack. Since RabbitMQ 4.3, only reject counts
+            // toward the delivery limit. A nack can requeue a message forever.
+            $message->reject(requeue: true);
         }
     }
 

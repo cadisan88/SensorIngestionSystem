@@ -14,7 +14,9 @@ use Illuminate\Support\Facades\Log;
 class StateEventProcessor
 {
     // Longer than one event takes. It frees the lock if a worker crashes.
-    private const LOCK_TTL_SECONDS = 30;
+    // Keep it shorter than all retries together (5 deliveries x LOCK_WAIT_SECONDS),
+    // so a crashed worker cannot send valid messages to the dead letter queue.
+    private const LOCK_TTL_SECONDS = 10;
 
     // If the lock is still taken after this, the message is requeued.
     private const LOCK_WAIT_SECONDS = 5;
