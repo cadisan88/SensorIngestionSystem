@@ -188,6 +188,8 @@ The first rule is checked first. If the Redis key is missing, the other rules ap
 
 Redis still keeps the newest state by timestamp in every case.
 
+In the database, the state of a stall comes from its latest session (by `started_at`): `active` means occupied.
+
 ### 7. Data model (MariaDB)
 
 | Table | Main columns |
@@ -230,6 +232,8 @@ Schema changes are versioned with Laravel migrations. A seeder creates demo stal
 - Docker Compose
 - PHPUnit
 
+The Laravel app lives in `src/`. The Docker files are in the repo root. The root `.env` is the only config file, and Compose passes its values to the containers.
+
 ## Running it locally
 
 Requirements: Docker and Docker Compose.
@@ -246,6 +250,8 @@ docker compose run --rm --no-deps app php artisan key:generate --show
 docker compose up -d --build
 docker compose exec app php artisan migrate --seed
 ```
+
+`docker compose up` starts everything, including both workers. The one-shot `rabbitmq-setup` container creates the RabbitMQ topology before the API and the workers start. This cannot happen in the Dockerfile, because no broker exists at build time. It is normal to see `rabbitmq-setup` as exited.
 
 Check that it is running:
 
@@ -303,7 +309,16 @@ docker compose up -d --scale state-worker=3
 
 ### Admin access
 
-The API is the only service open to the network. MariaDB, Redis and the RabbitMQ management page are published on `127.0.0.1` only, so you can inspect them from your own machine and nobody else can. Host ports and passwords are set in `.env`. The RabbitMQ management page normally runs on port 15672 inside its container.
+The API is the only service open to the network. The services below are published on `127.0.0.1` only, so you can inspect them from your own machine and nobody else can. Host ports and passwords are set in `.env`.
+
+| Service | Default address |
+|---------|-----------------|
+| MariaDB | `127.0.0.1:3307` |
+| Redis | `127.0.0.1:6380` |
+| RabbitMQ management page | `http://localhost:15672` |
+| phpMyAdmin | `http://localhost:8080` |
+
+Workers are long-running PHP processes. After changing worker code, run `docker compose restart state-worker telemetry-worker`.
 
 ## Tests
 
@@ -324,8 +339,12 @@ Tests use SQLite in memory and Redis database 15, so they do not touch your real
 
 Included: ingestion, live state, session history, sensor health, and failure handling.
 
-Not included: user accounts, a user interface, real LoRaWAN decoding (the API receives already decoded JSON), and production monitoring.
+Not included: user accounts, a user interface, real LoRaWAN decoding (the API receives already decoded JSON), production monitoring, and TLS. Nginx serves plain HTTP here. In production, TLS would end in front of it, because the gateway token must not travel unencrypted.
 
 ## Project status
 
-Design is complete. Implementation is in progress.
+Implemented: the ingress API, the RabbitMQ topology, both workers, the live state in Redis, the session rules, the demo seeder, the gateway emulator, and the PHPUnit tests.
+
+Checked by hand against the real services, not by the automated tests: publisher confirms, a `503` when RabbitMQ is down, messages surviving a broker restart, the delivery limit, and a clean worker shutdown.
+
+No speed or load measurements were made.
