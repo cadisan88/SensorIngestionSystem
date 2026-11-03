@@ -1,5 +1,7 @@
 # Sensor Ingestion System
 
+[![Tests](https://github.com/cadisan88/SensorIngestionSystem/actions/workflows/tests.yml/badge.svg)](https://github.com/cadisan88/SensorIngestionSystem/actions/workflows/tests.yml)
+
 A small backend that ingests events from battery-powered parking sensors, keeps the live state of every stall in Redis, and stores parking history in MariaDB.
 
 It is a proof of concept. The goal is to show a clean, event-driven design with PHP, Laravel, RabbitMQ and Redis, not to build a full product.
@@ -54,6 +56,8 @@ LoRaWAN network server
 
   Messages that fail for good --> dead_letter_queue
 ```
+
+The full API is described in [`openapi.yaml`](openapi.yaml).
 
 ### 1. Ingress API
 
@@ -279,6 +283,7 @@ These are accepted to keep the proof of concept simple.
 - MariaDB 11
 - Docker Compose
 - PHPUnit
+- GitHub Actions
 
 The Laravel app lives in `src/`. The Docker files are in the repo root. The root `.env` is the only config file, and Compose passes its values to the containers.
 
@@ -385,6 +390,8 @@ Tests cover the gateway token, request validation, routing keys, sensor to stall
 
 Tests use SQLite in memory and Redis database 15, so they do not touch your real data. Redis must be running. The publisher is mocked, so these tests do not cover the real connection to RabbitMQ.
 
+GitHub Actions runs these tests and checks `openapi.yaml` on every push to `master` and on every pull request.
+
 ## Future work
 
 - **Consistent-hash exchange.** Route all events of one stall to the same consumer, so each stall is processed in order without relying only on timestamps and locks.
@@ -401,5 +408,7 @@ Not included: user accounts, a user interface, real LoRaWAN decoding (the API re
 Implemented: the ingress API, the stall list and state endpoints, the RabbitMQ topology, both workers, the live state in Redis, the session rules, the demo seeder, the gateway emulator, and the PHPUnit tests.
 
 Checked by hand against the real services, not by the automated tests: publisher confirms, a `503` when RabbitMQ is down, messages surviving a broker restart, the delivery limit, and a clean worker shutdown.
+
+`openapi.yaml` was checked once against a running copy of the API with Schemathesis, using 216 generated requests. That run did not include the `503` responses.
 
 No speed or load measurements were made.
