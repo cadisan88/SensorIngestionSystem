@@ -172,18 +172,14 @@ services:
       rabbitmq:
         condition: service_healthy
 
-  # ---------------------------------------------------------------
-  # The services below need Artisan commands that we have not written
-  # yet. They are in the "workers" profile, so they do not start with
-  # a normal "docker compose up". Start them with:
-  #   docker compose --profile workers up -d
-  # ---------------------------------------------------------------
-
+  # Long-running PHP processes. After changing worker code, run:
+  #   docker compose restart state-worker telemetry-worker
   state-worker:
     <<: *php-service
-    profiles: ["workers"]
     restart: unless-stopped
     command: ["php", "artisan", "consume:state"]
+    # The PHP-FPM image stops with SIGQUIT, but the workers handle SIGTERM.
+    stop_signal: SIGTERM
     stop_grace_period: 30s
     depends_on:
       rabbitmq-setup:
@@ -195,9 +191,10 @@ services:
 
   telemetry-worker:
     <<: *php-service
-    profiles: ["workers"]
     restart: unless-stopped
     command: ["php", "artisan", "consume:telemetry"]
+    # The PHP-FPM image stops with SIGQUIT, but the workers handle SIGTERM.
+    stop_signal: SIGTERM
     stop_grace_period: 30s
     depends_on:
       rabbitmq-setup:

@@ -298,7 +298,7 @@ See all options with `docker compose exec app php artisan gateway:emulate --help
 Scale the workers:
 
 ```bash
-docker compose --profile workers up -d --scale state-worker=3
+docker compose up -d --scale state-worker=3
 ```
 
 ### Admin access
@@ -308,10 +308,12 @@ The API is the only service open to the network. MariaDB, Redis and the RabbitMQ
 ## Tests
 
 ```bash
-docker compose exec app php artisan test
+docker compose exec app vendor/bin/phpunit
 ```
 
-Planned tests: the gateway token, request validation, publishing to the queue, sensor to stall mapping (including unknown sensors), the session rules, and out-of-order handling.
+Tests cover the gateway token, request validation, routing keys, sensor to stall mapping (including unknown sensors), the session rules, out-of-order handling, duplicates, and how workers ack or reject messages.
+
+Tests use SQLite in memory and Redis database 15, so they do not touch your real data. Redis must be running. The publisher is mocked, so these tests do not cover the real connection to RabbitMQ.
 
 ## Future work
 
