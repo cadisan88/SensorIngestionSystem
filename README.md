@@ -264,6 +264,7 @@ Schema changes are versioned with Laravel migrations. A seeder creates demo stal
 These are accepted to keep the proof of concept simple.
 
 - **Lost `VACANT`.** If a `VACANT` packet never arrives, the session stays open. The next `OCCUPIED` is ignored as a duplicate, so two parkings merge into one session.
+- **Late `VACANT`.** A `VACANT` that is older than the newest event but not older than the session start still closes the session. Redis ignores it, so MariaDB can say the session is completed while Redis says `OCCUPIED`. Ignoring it instead would merge two parkings when the real order was `OCCUPIED`, `VACANT`, `OCCUPIED`. Neither rule is right in every case, because the order cannot be known for sure.
 - **Future timestamps.** A packet can be up to 5 minutes ahead of server time. Until that time passes, real events for that stall look late, so an `OCCUPIED` opens no session.
 - **Stuck lock.** A worker waits 5 seconds for a stall lock, and a message gets 5 deliveries. A lock held for about 25 seconds can send a valid message to `dead_letter_queue`. A crashed worker cannot cause this, because its lock expires after 10 seconds.
 - **Redis down.** The state endpoint uses the database only when Redis has no state for the stall. If Redis itself is down, the endpoint and the workers fail until it returns. Messages wait in the queue.
@@ -322,7 +323,7 @@ curl -X POST http://localhost:8081/api/v1/telemetry/ingress \
       "temperature_c": 14.2,
       "signal_rssi_dbm": -85
     },
-    "timestamp": 1793397360
+    "timestamp": '"$(date +%s)"'
   }'
 ```
 
