@@ -155,7 +155,9 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # Not "ping": it passes before port 5672 accepts connections, and then
+      # rabbitmq-setup fails with "Connection refused" on a fresh start.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 15s
       timeout: 10s
       retries: 5
