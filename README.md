@@ -116,7 +116,7 @@ These are public, return only up or down, and show no version details.
 |-------|---------|---------|
 | `real_time_state_processing` | `sensor.state.*` | Fast path: live stall state and sessions |
 | `telemetry_analytics` | `sensor.#` | Stores every frame as a sensor reading |
-| `dead_letter_queue` | from `sensor.events.dlx` | Keeps messages that cannot be processed. It has no delivery limit, so they are never dropped. |
+| `dead_letter_queue` | from `sensor.events.dlx` | Keeps messages that cannot be processed. It has no delivery limit, so a limit never drops them. |
 
 Decisions:
 
@@ -132,14 +132,14 @@ The server owns the mapping. Sensors do not know their stall.
 - The `sensors` table links `sensor_uid` to a stall.
 - Workers resolve the stall in this order: Redis, then MariaDB, then write the result to Redis.
 - Found mappings are cached with no expiry (`sensors:{sensor_uid}:stall`).
-- Whoever changes a mapping (a seeder or a command) must also clear the Redis keys of that sensor: the mapping and the `unknown` marker.
+- Whoever changes a mapping must also clear the Redis keys of that sensor: the mapping and the `unknown` marker. Today only the seeder changes mappings. There is no command for it.
 
 **Unknown sensors**
 
 - The state worker treats it as a permanent error. It rejects the message into `dead_letter_queue` and logs a clear line. No stall is ever created automatically.
 - The telemetry worker still stores the reading with an empty stall, because battery and signal data are still valid.
 - "Unknown" is remembered in Redis for 60 seconds, so a flood from one unregistered device does not hit the database.
-- After the sensor is registered, the messages in `dead_letter_queue` can be published again.
+- After the sensor is registered, the messages in `dead_letter_queue` could be published again. This project has no tool for it, so it would be a manual step. It was not tested.
 
 ### 5. Live state in Redis
 
@@ -152,7 +152,43 @@ The server owns the mapping. Sensors do not know their stall.
 
 Radio packets can arrive out of order. A small Lua script compares the packet timestamp with `last_updated_ts` and writes only if the packet is not older. The check and the write happen in one atomic step. A packet with the same timestamp is accepted, so processing a message twice gives the same result.
 
+The same script is used when a message writes to the `sensors:{sensor_uid}:telemetry` hash, so a late message cannot overwrite the battery, temperature and signal values of a newer one. It only orders the messages. It does not judge if a sensor is healthy.
+
 Stall state has no expiry. A reader can judge freshness with `last_updated_ts` and `last_seen_at`.
+
+**Reading the state**
+
+`GET /api/v1/stalls/{code}/state` returns the current state of a stall. It needs the same `X-Gateway-Token` header as the ingress endpoint, because this proof of concept has no user accounts.
+
+```json
+{
+  "stall": "A-01",
+  "source": "redis",
+  "state": "OCCUPIED",
+  "last_updated_ts": 1793397360
+}
+```
+
+The stall code is looked up in MariaDB, and the state is read from Redis. If Redis has no state for the stall, the endpoint derives it from the latest session, and `source` is `database`. If the stall has no events yet, `state` and `last_updated_ts` are empty.
+
+| Status | Meaning |
+|--------|---------|
+| 200 | The state of the stall. |
+| 401 | Missing or wrong token. |
+| 404 | The stall does not exist. |
+
+**Listing the stalls**
+
+`GET /api/v1/stalls` returns every stall and its sensors, sorted by code. It needs the same token. It is here so a reviewer can see which stalls and sensors exist, and use them to send test events.
+
+```json
+{
+  "stalls": [
+    { "code": "A-01", "sensors": ["sensor-99f4a1"] },
+    { "code": "A-02", "sensors": ["sensor-99f4a2"] }
+  ]
+}
+```
 
 ### 6. Workers
 
@@ -210,10 +246,11 @@ Schema changes are versioned with Laravel migrations. A seeder creates demo stal
 | Worker crashes mid-message | Manual acknowledgements. A message is acked only after the database and Redis both succeed, so RabbitMQ delivers it again (at-least-once). |
 | RabbitMQ restarts | Quorum queues, persistent messages, and publisher confirms. `202` means the message is stored. |
 | Duplicate messages | Idempotent writes. A duplicate `OCCUPIED` does not create a second session. Duplicate readings are ignored by a unique key. |
-| Late or out-of-order packets | The Redis Lua script ignores older timestamps for live state. History still records the event. |
+| Late or out-of-order packets | The Redis Lua script ignores older messages for the stall state and for the sensor telemetry hash. History still records the event. |
 | Two events for one stall at the same time | A Redis lock per stall. |
 | Message keeps failing | After 5 deliveries, RabbitMQ moves it to `dead_letter_queue`. |
-| Corrupt message or unknown sensor | Rejected without re-queue and moved to `dead_letter_queue`. |
+| Corrupt message | Rejected without re-queue and moved to `dead_letter_queue`. |
+| Unknown sensor | The state worker rejects the message without re-queue, and it moves to `dead_letter_queue`. The telemetry worker still stores the reading with an empty stall. |
 | Slow database | The API does not use it. Messages wait in the queue. |
 | Open endpoint | The gateway token is required. |
 
@@ -221,6 +258,16 @@ Schema changes are versioned with Laravel migrations. A seeder creates demo stal
 
 - **Publishing cost.** PHP-FPM starts each request from scratch, so each ingress request opens its own RabbitMQ connection. This is a known trade-off, accepted to keep the design simple.
 - **Ordering.** RabbitMQ does not guarantee order across several consumers. This project relies on packet timestamps and the per-stall lock.
+
+## Known limits
+
+These are accepted to keep the proof of concept simple.
+
+- **Lost `VACANT`.** If a `VACANT` packet never arrives, the session stays open. The next `OCCUPIED` is ignored as a duplicate, so two parkings merge into one session.
+- **Future timestamps.** A packet can be up to 5 minutes ahead of server time. Until that time passes, real events for that stall look late, so an `OCCUPIED` opens no session.
+- **Stuck lock.** A worker waits 5 seconds for a stall lock, and a message gets 5 deliveries. A lock held for about 25 seconds can send a valid message to `dead_letter_queue`. A crashed worker cannot cause this, because its lock expires after 10 seconds.
+- **Redis down.** The state endpoint uses the database only when Redis has no state for the stall. If Redis itself is down, the endpoint and the workers fail until it returns. Messages wait in the queue.
+- **Flat stall list.** `GET /api/v1/stalls` returns all stalls with no paging, and they are not grouped by city, institution or parking lot. This is not realistic. A real system would need that grouping.
 
 ## Tech stack
 
@@ -279,7 +326,14 @@ curl -X POST http://localhost:8081/api/v1/telemetry/ingress \
   }'
 ```
 
-Or use the gateway emulator, an Artisan command that sends real HTTP requests to the endpoint:
+List the stalls, then read the state of one:
+
+```bash
+curl http://localhost:8081/api/v1/stalls -H "X-Gateway-Token: <GATEWAY_TOKEN>"
+curl http://localhost:8081/api/v1/stalls/A-01/state -H "X-Gateway-Token: <GATEWAY_TOKEN>"
+```
+
+Or send events with the gateway emulator, an Artisan command that sends real HTTP requests to the endpoint:
 
 ```bash
 # One OCCUPIED packet from the demo sensor
@@ -326,7 +380,7 @@ Workers are long-running PHP processes. After changing worker code, run `docker 
 docker compose exec app vendor/bin/phpunit
 ```
 
-Tests cover the gateway token, request validation, routing keys, sensor to stall mapping (including unknown sensors), the session rules, out-of-order handling, duplicates, and how workers ack or reject messages.
+Tests cover the gateway token, request validation, routing keys, sensor to stall mapping (including unknown sensors), the session rules, out-of-order handling, duplicates, the stall list and state endpoints, and how workers ack or reject messages.
 
 Tests use SQLite in memory and Redis database 15, so they do not touch your real data. Redis must be running. The publisher is mocked, so these tests do not cover the real connection to RabbitMQ.
 
@@ -343,7 +397,7 @@ Not included: user accounts, a user interface, real LoRaWAN decoding (the API re
 
 ## Project status
 
-Implemented: the ingress API, the RabbitMQ topology, both workers, the live state in Redis, the session rules, the demo seeder, the gateway emulator, and the PHPUnit tests.
+Implemented: the ingress API, the stall list and state endpoints, the RabbitMQ topology, both workers, the live state in Redis, the session rules, the demo seeder, the gateway emulator, and the PHPUnit tests.
 
 Checked by hand against the real services, not by the automated tests: publisher confirms, a `503` when RabbitMQ is down, messages surviving a broker restart, the delivery limit, and a clean worker shutdown.
 
