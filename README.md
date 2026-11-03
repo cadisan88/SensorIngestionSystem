@@ -177,6 +177,19 @@ The stall code is looked up in MariaDB, and the state is read from Redis. If Red
 | 401 | Missing or wrong token. |
 | 404 | The stall does not exist. |
 
+**Listing the stalls**
+
+`GET /api/v1/stalls` returns every stall and its sensors, sorted by code. It needs the same token. It is here so a reviewer can see which stalls and sensors exist, and use them to send test events.
+
+```json
+{
+  "stalls": [
+    { "code": "A-01", "sensors": ["sensor-99f4a1"] },
+    { "code": "A-02", "sensors": ["sensor-99f4a2"] }
+  ]
+}
+```
+
 ### 6. Workers
 
 Workers are Laravel Artisan commands that use `php-amqplib` directly. They are stateless, so you can run as many as you need.
@@ -254,6 +267,7 @@ These are accepted to keep the proof of concept simple.
 - **Future timestamps.** A packet can be up to 5 minutes ahead of server time. Until that time passes, real events for that stall look late, so an `OCCUPIED` opens no session.
 - **Stuck lock.** A worker waits 5 seconds for a stall lock, and a message gets 5 deliveries. A lock held for about 25 seconds can send a valid message to `dead_letter_queue`. A crashed worker cannot cause this, because its lock expires after 10 seconds.
 - **Redis down.** The state endpoint uses the database only when Redis has no state for the stall. If Redis itself is down, the endpoint and the workers fail until it returns. Messages wait in the queue.
+- **Flat stall list.** `GET /api/v1/stalls` returns all stalls with no paging, and they are not grouped by city, institution or parking lot. This is not realistic. A real system would need that grouping.
 
 ## Tech stack
 
@@ -312,9 +326,10 @@ curl -X POST http://localhost:8081/api/v1/telemetry/ingress \
   }'
 ```
 
-Read the state of a stall:
+List the stalls, then read the state of one:
 
 ```bash
+curl http://localhost:8081/api/v1/stalls -H "X-Gateway-Token: <GATEWAY_TOKEN>"
 curl http://localhost:8081/api/v1/stalls/A-01/state -H "X-Gateway-Token: <GATEWAY_TOKEN>"
 ```
 
@@ -365,7 +380,7 @@ Workers are long-running PHP processes. After changing worker code, run `docker 
 docker compose exec app vendor/bin/phpunit
 ```
 
-Tests cover the gateway token, request validation, routing keys, sensor to stall mapping (including unknown sensors), the session rules, out-of-order handling, duplicates, the stall state endpoint, and how workers ack or reject messages.
+Tests cover the gateway token, request validation, routing keys, sensor to stall mapping (including unknown sensors), the session rules, out-of-order handling, duplicates, the stall list and state endpoints, and how workers ack or reject messages.
 
 Tests use SQLite in memory and Redis database 15, so they do not touch your real data. Redis must be running. The publisher is mocked, so these tests do not cover the real connection to RabbitMQ.
 
@@ -382,7 +397,7 @@ Not included: user accounts, a user interface, real LoRaWAN decoding (the API re
 
 ## Project status
 
-Implemented: the ingress API, the stall state endpoint, the RabbitMQ topology, both workers, the live state in Redis, the session rules, the demo seeder, the gateway emulator, and the PHPUnit tests.
+Implemented: the ingress API, the stall list and state endpoints, the RabbitMQ topology, both workers, the live state in Redis, the session rules, the demo seeder, the gateway emulator, and the PHPUnit tests.
 
 Checked by hand against the real services, not by the automated tests: publisher confirms, a `503` when RabbitMQ is down, messages surviving a broker restart, the delivery limit, and a clean worker shutdown.
 

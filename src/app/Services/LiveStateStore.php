@@ -34,6 +34,22 @@ class LiveStateStore
         return is_numeric($value) ? (int) $value : null;
     }
 
+    /**
+     * Returns the live state of a stall, or null if Redis has none.
+     *
+     * @return array{state: string, last_updated_ts: int}|null
+     */
+    public function stallState(int $stallId): ?array
+    {
+        $hash = Redis::hgetall("stalls:{$stallId}:state");
+
+        if (empty($hash)) {
+            return null;
+        }
+
+        return ['state' => $hash['state'], 'last_updated_ts' => (int) $hash['last_updated_ts']];
+    }
+
     public function writeStallState(int $stallId, string $state, int $timestamp): void
     {
         $this->writeIfNotOlder("stalls:{$stallId}:state", 'last_updated_ts', $timestamp, ['state' => $state]);
