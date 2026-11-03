@@ -1,0 +1,303 @@
+openapi: 3.1.0
+
+info:
+  title: Sensor Ingestion API
+  version: 1.0.0
+  description: |
+    Receives events from parking sensors and returns live stall state.
+
+    All error responses are JSON.
+
+servers:
+  - url: http://localhost:8081/api/v1
+    description: Local Docker setup
+
+tags:
+  - name: Telemetry
+    description: Events sent by gateways.
+  - name: Stalls
+    description: Stalls and their live state.
+  - name: Health
+    description: Checks used by people and Docker.
+
+paths:
+  /telemetry/ingress:
+    post:
+      operationId: ingestTelemetry
+      tags: [Telemetry]
+      summary: Queue one sensor event
+      description: |
+        Publishes the event to RabbitMQ and waits for the broker to confirm it.
+        A `202` means the broker has the event. It does not mean a worker has
+        processed it yet, and an unknown sensor also gets a `202`.
+      security:
+        - gatewayToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelemetryEvent"
+      responses:
+        "202":
+          description: The broker confirmed the event.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tracking_id]
+                properties:
+                  tracking_id:
+                    type: string
+                    format: uuid
+                    description: Created by the API. Also added to the queued event.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: The event is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "503":
+          description: The broker did not confirm the event. The gateway should try again.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+
+  /stalls:
+    get:
+      operationId: listStalls
+      tags: [Stalls]
+      summary: List all stalls and their sensors
+      description: |
+        A flat list with no paging, to help reviewers find the seeded stalls.
+        A real system would group stalls and page the results.
+      security:
+        - gatewayToken: []
+      responses:
+        "200":
+          description: All stalls, ordered by code.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stalls]
+                properties:
+                  stalls:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Stall"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /stalls/{code}/state:
+    get:
+      operationId: getStallState
+      tags: [Stalls]
+      summary: Read the state of one stall
+      description: |
+        Reads Redis first. If Redis has no state for the stall, the state comes
+        from the latest parking session.
+      security:
+        - gatewayToken: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: The stall code.
+          schema:
+            type: string
+          example: A-01
+      responses:
+        "200":
+          description: The state of the stall.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StallState"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: There is no stall with this code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+
+  /health:
+    get:
+      operationId: getLiveness
+      tags: [Health]
+      summary: Check that the app is running
+      description: Checks no dependency. Docker uses it for the web health check.
+      security: []
+      responses:
+        "200":
+          description: The app is running.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: up
+
+  /health/ready:
+    get:
+      operationId: getReadiness
+      tags: [Health]
+      summary: Check that MariaDB, Redis and RabbitMQ answer
+      security: []
+      responses:
+        "200":
+          description: All dependencies answer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+        "503":
+          description: At least one dependency does not answer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+
+components:
+  securitySchemes:
+    gatewayToken:
+      type: apiKey
+      in: header
+      name: X-Gateway-Token
+
+  responses:
+    Unauthorized:
+      description: The token is missing or wrong.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Message"
+
+  schemas:
+    TelemetryEvent:
+      type: object
+      required: [sensor_uid, gateway_id, event_type, timestamp]
+      properties:
+        sensor_uid:
+          type: string
+          minLength: 1
+          maxLength: 64
+          example: sensor-99f4a1
+        gateway_id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Required, but not stored or compared against anything.
+          example: gw-01
+        event_type:
+          type: string
+          enum: [OCCUPIED, VACANT, HEARTBEAT, ERROR]
+        payload:
+          type: object
+          properties:
+            battery_level_pct:
+              type: [number, "null"]
+              minimum: 0
+              maximum: 100
+              example: 98.5
+            temperature_c:
+              type: [number, "null"]
+              minimum: -999.99
+              maximum: 999.99
+              example: 14.2
+            signal_rssi_dbm:
+              type: [integer, "null"]
+              minimum: -200
+              maximum: 0
+              example: -85
+        timestamp:
+          type: integer
+          minimum: 1
+          description: |
+            Unix time in seconds, set by the sensor. Old values are accepted,
+            because late packets are expected. A value too far in the future
+            gets a `422`. The limit is `INGRESS_MAX_FUTURE_SECONDS` (default 300).
+          example: 1793397360
+
+    Stall:
+      type: object
+      required: [code, sensors]
+      properties:
+        code:
+          type: string
+          example: A-01
+        sensors:
+          type: array
+          items:
+            type: string
+          example: [sensor-99f4a1]
+
+    StallState:
+      type: object
+      required: [stall, source, state, last_updated_ts]
+      properties:
+        stall:
+          type: string
+          example: A-01
+        source:
+          type: string
+          enum: [redis, database]
+          description: Where the state came from.
+        state:
+          type: [string, "null"]
+          enum: [OCCUPIED, VACANT, null]
+          description: Null when the stall has no events and no sessions yet.
+        last_updated_ts:
+          type: [integer, "null"]
+          description: Unix time in seconds of the event behind this state.
+          example: 1793397360
+
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          $ref: "#/components/schemas/UpOrDown"
+        checks:
+          type: object
+          required: [database, redis, rabbitmq]
+          properties:
+            database:
+              $ref: "#/components/schemas/UpOrDown"
+            redis:
+              $ref: "#/components/schemas/UpOrDown"
+            rabbitmq:
+              $ref: "#/components/schemas/UpOrDown"
+
+    UpOrDown:
+      type: string
+      enum: [up, down]
+
+    Message:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+
+    ValidationError:
+      type: object
+      required: [message, errors]
+      properties:
+        message:
+          type: string
+        errors:
+          type: object
+          description: The messages for each invalid field.
+          additionalProperties:
+            type: array
+            items:
+              type: string
