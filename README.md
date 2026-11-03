@@ -403,12 +403,27 @@ Included: ingestion, live state, session history, sensor health, and failure han
 
 Not included: user accounts, a user interface, real LoRaWAN decoding (the API receives already decoded JSON), production monitoring, and TLS. Nginx serves plain HTTP here. In production, TLS would end in front of it, because the gateway token must not travel unencrypted.
 
+## How I used AI
+
+The messaging design draws on my production work. I built a resilient asynchronous pipeline with Laravel and RabbitMQ for a platform with more than 100k active users, with `php-amqplib` consumers under Supervisor and Redis cache locks. I wrote that code myself, using at most code completion tools.
+
+Here, AI was a tool under my direction. It wrote most of the code. I set the requirements, made the design decisions, and reviewed and approved each change. A change only counted as working after it was run.
+
+I also used AI to:
+
+- Analyze designs and explore alternatives I might not have considered.
+- Review the code and the automated tests, and find spots that need better coverage.
+- Debug problems found while running the system.
+- Run end-to-end checks, such as a test from a clean clone.
+- Improve the clarity of the documentation.
+- Learn new tools and technologies faster. For example, I learned Schemathesis during this project.
+
 ## Project status
 
 Implemented: the ingress API, the stall list and state endpoints, the RabbitMQ topology, both workers, the live state in Redis, the session rules, the demo seeder, the gateway emulator, and the PHPUnit tests.
 
 Checked by hand against the real services, not by the automated tests: publisher confirms, a `503` when RabbitMQ is down, messages surviving a broker restart, the delivery limit, and a clean worker shutdown.
 
-`openapi.yaml` was checked once against a running copy of the API with Schemathesis, using 216 generated requests. That run did not include the `503` responses.
+`openapi.yaml` was checked once against a running copy of the API with Schemathesis (216 generated test cases). That run did not include the `503` responses.
 
 No speed or load measurements were made.
